@@ -1,7 +1,6 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { chromium } from "playwright";
 
 // Define our MCP agent with tools
 export class MyMCP extends McpAgent {
@@ -57,56 +56,69 @@ export class MyMCP extends McpAgent {
 			}
 		);
 
-		// Playwright web automation tool
+		// Web scraping tool using fetch
 		this.server.tool(
-			"playwright_navigate",
+			"scrape_webpage",
 			{
 				url: z.string().url(),
 				selector: z.string().optional(),
-				action: z.string().optional(),
-				text: z.string().optional(),
-				screenshot: z.boolean().optional().default(false),
+				extract_text: z.boolean().optional().default(true),
+				user_agent: z.string().optional().default("Mozilla/5.0 (compatible; MCP-Scraper/1.0)"),
 			},
-			async ({ url, selector, action, text, screenshot }) => {
+			async ({ url, selector, extract_text, user_agent }) => {
 				try {
-					const browser = await chromium.launch();
-					const page = await browser.newPage();
-					await page.goto(url);
+					const response = await fetch(url, {
+						headers: {
+							'User-Agent': user_agent,
+						},
+					});
 
-					let result = `Navigated to ${url}`;
-
-					if (selector && action) {
-						switch (action) {
-							case "click":
-								await page.click(selector);
-								result += `\nClicked element: ${selector}`;
-								break;
-							case "type":
-								if (text) {
-									await page.fill(selector, text);
-									result += `\nTyped "${text}" into element: ${selector}`;
-								}
-								break;
-							case "getText":
-								const textContent = await page.textContent(selector);
-								result += `\nText from ${selector}: ${textContent}`;
-								break;
-						}
+					if (!response.ok) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `HTTP Error: ${response.status} ${response.statusText}`,
+								},
+							],
+						};
 					}
 
-					if (screenshot) {
-						const screenshotBuffer = await page.screenshot();
-						result += `\nScreenshot taken (${screenshotBuffer.length} bytes)`;
+					const html = await response.text();
+					
+					if (extract_text) {
+						// Simple HTML to text conversion
+						const textContent = html
+							.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+							.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+							.replace(/<[^>]*>/g, ' ')
+							.replace(/\s+/g, ' ')
+							.trim();
+						
+						return {
+							content: [
+								{
+									type: "text",
+									text: `URL: ${url}\nLength: ${textContent.length} characters\n\nContent:\n${textContent}`,
+								},
+							],
+						};
+					} else {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `URL: ${url}\nHTML Length: ${html.length} characters\n\nHTML:\n${html}`,
+								},
+							],
+						};
 					}
-
-					await browser.close();
-					return { content: [{ type: "text", text: result }] };
 				} catch (error) {
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+								text: `Error scraping ${url}: ${error instanceof Error ? error.message : String(error)}`,
 							},
 						],
 					};
@@ -114,40 +126,37 @@ export class MyMCP extends McpAgent {
 			}
 		);
 
-		// Playwright page content scraping tool
+		// URL analysis tool
 		this.server.tool(
-			"playwright_scrape",
+			"analyze_url",
 			{
 				url: z.string().url(),
-				selector: z.string().optional(),
-				waitFor: z.string().optional(),
 			},
-			async ({ url, selector, waitFor }) => {
+			async ({ url }) => {
 				try {
-					const browser = await chromium.launch();
-					const page = await browser.newPage();
-					await page.goto(url);
+					const response = await fetch(url, {
+						method: 'HEAD',
+						headers: {
+							'User-Agent': 'Mozilla/5.0 (compatible; MCP-Analyzer/1.0)',
+						},
+					});
 
-					if (waitFor) {
-						await page.waitForSelector(waitFor);
-					}
-
-					let content: string;
-					if (selector) {
-						const element = await page.locator(selector);
-						content = await element.textContent() || "";
-					} else {
-						content = await page.content();
-					}
-
-					await browser.close();
-					return { content: [{ type: "text", text: content }] };
+					const headers = Object.fromEntries(response.headers.entries());
+					
+					return {
+						content: [
+							{
+								type: "text",
+								text: `URL Analysis: ${url}\nStatus: ${response.status} ${response.statusText}\nContent-Type: ${headers['content-type'] || 'unknown'}\nContent-Length: ${headers['content-length'] || 'unknown'}\nServer: ${headers['server'] || 'unknown'}\nLast-Modified: ${headers['last-modified'] || 'unknown'}`,
+							},
+						],
+					};
 				} catch (error) {
 					return {
 						content: [
 							{
 								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+								text: `Error analyzing ${url}: ${error instanceof Error ? error.message : String(error)}`,
 							},
 						],
 					};
@@ -157,16 +166,39 @@ export class MyMCP extends McpAgent {
 	}
 }
 
+function validateApiKey(request: Request): boolean {
+	const apiKey = request.headers.get("Authorization")?.replace("Bearer ", "") ||
+	             request.headers.get("X-API-Key") ||
+	             request.headers.get("api-key") ||
+	             new URL(request.url).searchParams.get("api_key");
+	
+	const validApiKey = env.API_KEY;
+	return apiKey === validApiKey;
+}
+
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
+
+		// Check API key for protected endpoints
+		if (url.pathname === "/sse" || url.pathname === "/sse/message" || url.pathname === "/mcp" || url.pathname === "/") {
+			if (!validateApiKey(request)) {
+				return new Response("Unauthorized: Invalid or missing API key", { 
+					status: 401,
+					headers: {
+						"WWW-Authenticate": "Bearer realm=\"MCP Server\"",
+						"Content-Type": "text/plain"
+					}
+				});
+			}
+		}
 
 		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
 			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
 		}
 
-		if (url.pathname === "/mcp") {
-			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		if (url.pathname === "/mcp" || url.pathname === "/") {
+			return MyMCP.serve("/").fetch(request, env, ctx);
 		}
 
 		return new Response("Not found", { status: 404 });
