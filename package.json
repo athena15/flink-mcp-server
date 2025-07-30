@@ -12,6 +12,7 @@
 		"type-check": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@mendable/firecrawl-js": "^1.0.0",
 		"@modelcontextprotocol/sdk": "1.13.1",
 		"agents": "^0.0.100",
 		"playwright": "^1.54.1",

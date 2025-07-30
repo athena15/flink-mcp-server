@@ -5,6 +5,16 @@ declare namespace Cloudflare {
 		OAUTH_KV: KVNamespace;
 		MCP_OBJECT: DurableObjectNamespace<import("./src/index").MyMCP>;
 		ASSETS: Fetcher;
+		
+		// API Keys for MCP Server Authentication
+		API_KEY: string;
+		
+		// Firecrawl API Key for web scraping and search functionality
+		FIRECRAWL_API_KEY: string;
+		
+		// Future: Gmail credentials for email functionality
+		// GMAIL_USERNAME: string;
+		// GMAIL_PASSWORD: string;
 	}
 }
 interface Env extends Cloudflare.Env {}
